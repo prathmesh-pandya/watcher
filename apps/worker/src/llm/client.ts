@@ -6,6 +6,8 @@
  */
 
 import OpenAI from 'openai';
+import { z } from 'zod';
+import { TEST_CASE_KINDS, TEST_CASE_PRIORITIES } from '@watcher/shared';
 import { env } from '../env.js';
 import { logger } from '../logger.js';
 import type {
@@ -134,7 +136,30 @@ export async function updateFeatureDoc(input: FeatureDocUpdateInput): Promise<Fe
     thinking: { type: 'disabled' },
   };
 
-  const response = await client.chat.completions.create(params);
+  logger.info(
+    { repo: input.repoFullName, model, pass: 'feature-doc', promptChars: params.messages.reduce((n, m) => n + String(m.content).length, 0) },
+    'MiniMax call started',
+  );
+
+  let response;
+  try {
+    response = await client.chat.completions.create(params);
+  } catch (err) {
+    // Rethrown untouched -- BullMQ's retry/backoff still owns the retry.
+    logger.error({ repo: input.repoFullName, model, pass: 'feature-doc', err }, 'MiniMax call failed');
+    throw err;
+  }
+
+  logger.info(
+    {
+      repo: input.repoFullName,
+      model,
+      pass: 'feature-doc',
+      inputTokens: response.usage?.prompt_tokens,
+      outputTokens: response.usage?.completion_tokens,
+    },
+    'MiniMax call succeeded',
+  );
 
   const choice = response.choices[0];
   if (!choice) {
@@ -169,7 +194,7 @@ export async function updateFeatureDoc(input: FeatureDocUpdateInput): Promise<Fe
       outputTokens: response.usage?.completion_tokens,
       docChars: content.length,
     },
-    'feature doc generated',
+    'feature doc revision ready',
   );
 
   return {
@@ -184,49 +209,169 @@ export async function updateFeatureDoc(input: FeatureDocUpdateInput): Promise<Fe
   };
 }
 
-/*
- * ===========================================================================
- * STUB -- NOT IMPLEMENTED IN THIS PASS
- * ===========================================================================
- *
- * generateTestCases is still a deliberate placeholder. It returns well-formed
- * data of the right shape so the pipeline runs end to end, but makes no Claude
- * call and no prompt engineering has been done for it yet.
- *
- * To implement: mirror updateFeatureDoc above, but ask for structured JSON
- * matching GeneratedTestCase[] (a tool call is the reliable way) and validate
- * it with zod before it reaches Mongo.
- * ===========================================================================
- */
+const TEST_CASE_SYSTEM_PROMPT = `You are writing manual QA test cases for a software change.
 
-/** PASS 2 -- STUB. Produce the QA test cases for this change. */
-export async function generateTestCases(input: TestCaseGenerationInput): Promise<TestCaseGenerationResult> {
-  logger.warn(
+You will be given the current feature documentation for a repository and the
+git diff that was just pushed. Produce the test cases a QA engineer should run
+for this change.
+
+Rules:
+- Each test case must be executable by hand against a running application.
+  Steps are concrete UI or API actions, not instructions to read code.
+- Base the test cases on behavior the diff actually changes. Use the feature
+  documentation for surrounding context so steps can reference real screens,
+  fields and flows, but do not write cases for behavior this diff doesn't touch.
+- Prefer a small number of meaningful cases over exhaustive permutations.
+  Return between 1 and 8 test cases.
+- "kind" is "new" for behavior this diff introduces, "updated" for behavior it
+  changes, and "regression" for existing behavior at risk of breaking.
+- "area" is a short feature/screen label used for grouping, or null.
+- If the diff is purely non-functional (formatting, comments, dependency bumps,
+  refactors with no behavior change), return an empty testCases array.
+
+Output ONLY a JSON object, with no markdown fences and no commentary, in
+exactly this shape:
+
+{
+  "testCases": [
     {
-      stub: 'generateTestCases',
+      "title": "string",
+      "steps": ["string", "..."],
+      "expectedResult": "string",
+      "kind": "new" | "updated" | "regression",
+      "priority": "low" | "medium" | "high",
+      "area": "string or null"
+    }
+  ]
+}`;
+
+/**
+ * Validates the model's JSON before anything reaches Mongo. The enums are the
+ * shared constants the TestCase schema itself uses, so a value that parses here
+ * cannot be rejected by Mongoose later.
+ */
+const generatedTestCaseSchema = z.object({
+  title: z.string().min(1),
+  steps: z.array(z.string().min(1)).min(1),
+  expectedResult: z.string().min(1),
+  kind: z.enum(TEST_CASE_KINDS),
+  priority: z.enum(TEST_CASE_PRIORITIES),
+  area: z.string().min(1).nullable().catch(null),
+});
+
+const testCaseResponseSchema = z.object({
+  testCases: z.array(generatedTestCaseSchema).max(20),
+});
+
+/** Models often wrap JSON in ```json fences despite being told not to. */
+function stripCodeFence(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith('```')) return trimmed;
+  return trimmed
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/```$/, '')
+    .trim();
+}
+
+function buildTestCaseUserMessage(input: TestCaseGenerationInput): string {
+  const docs = input.featureDocContent.trim()
+    ? input.featureDocContent
+    : 'No feature documentation available yet.';
+
+  return [
+    `Repository: ${input.repoFullName} (${input.repoType})`,
+    `Branch: ${input.branch}`,
+    `Commit: ${input.commitSha}`,
+    '',
+    '## Current feature documentation',
+    '',
+    docs,
+    '',
+    '## Git diff for this push',
+    '',
+    input.diff.diff,
+  ].join('\n');
+}
+
+/**
+ * PASS 2 -- generate the QA test cases for this change.
+ *
+ * Gets the *updated* feature doc alongside the diff so cases can reference
+ * documented behavior rather than just the changed lines. Malformed JSON or a
+ * schema violation throws, so a bad response fails the job instead of writing
+ * partial rows.
+ */
+export async function generateTestCases(input: TestCaseGenerationInput): Promise<TestCaseGenerationResult> {
+  const client = getClient();
+  const model = env.MINIMAX_MODEL;
+
+  const params: MiniMaxChatParams = {
+    model,
+    max_tokens: MAX_TOKENS,
+    messages: [
+      { role: 'system', content: TEST_CASE_SYSTEM_PROMPT },
+      { role: 'user', content: buildTestCaseUserMessage(input) },
+    ],
+    thinking: { type: 'disabled' },
+  };
+
+  logger.info({ repo: input.repoFullName, model, pass: 'test-cases' }, 'MiniMax call started');
+
+  let response;
+  try {
+    response = await client.chat.completions.create(params);
+  } catch (err) {
+    logger.error({ repo: input.repoFullName, model, pass: 'test-cases', err }, 'MiniMax call failed');
+    throw err;
+  }
+
+  logger.info(
+    {
       repo: input.repoFullName,
-      model: env.ANTHROPIC_MODEL,
-      diffChars: input.diff.diff.length,
-      changedFiles: input.diff.files.length,
+      model,
+      pass: 'test-cases',
+      inputTokens: response.usage?.prompt_tokens,
+      outputTokens: response.usage?.completion_tokens,
     },
-    'LLM STUB: no Claude call made -- emitting one placeholder test case',
+    'MiniMax call succeeded',
   );
 
-  return {
-    model: 'stub:not-implemented',
-    testCases: [
-      {
-        title: `[stub] Smoke-test ${input.repoFullName} at ${input.commitSha.slice(0, 7)}`,
-        steps: [
-          'This is placeholder data produced by the LLM stub, not a real test case.',
-          `Implement generateTestCases() in apps/worker/src/llm/client.ts.`,
-          `Changed files in this push: ${input.diff.files.map((f) => f.filename).slice(0, 10).join(', ') || 'none'}.`,
-        ],
-        expectedResult: 'Replace this with a real expected result once the Claude call is implemented.',
-        kind: 'new',
-        priority: 'medium',
-        area: null,
-      },
-    ],
-  };
+  const choice = response.choices[0];
+  if (!choice) {
+    throw new Error(`MiniMax returned no choices for test cases on ${input.repoFullName}.`);
+  }
+  if (choice.finish_reason === 'length') {
+    throw new Error(
+      `Test-case generation for ${input.repoFullName} hit the ${MAX_TOKENS}-token cap; the JSON is truncated.`,
+    );
+  }
+
+  const raw = stripCodeFence(stripThinkBlock(choice.message.content ?? ''));
+  if (!raw) {
+    throw new Error(`MiniMax returned an empty test-case response for ${input.repoFullName}.`);
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(
+      `MiniMax returned non-JSON test cases for ${input.repoFullName}: ${raw.slice(0, 300)}`,
+    );
+  }
+
+  const validated = testCaseResponseSchema.safeParse(parsed);
+  if (!validated.success) {
+    const issues = validated.error.issues
+      .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
+      .join('; ');
+    throw new Error(`MiniMax test cases failed validation for ${input.repoFullName}: ${issues}`);
+  }
+
+  logger.info(
+    { repo: input.repoFullName, model, count: validated.data.testCases.length },
+    'test cases ready',
+  );
+
+  return { testCases: validated.data.testCases, model };
 }
