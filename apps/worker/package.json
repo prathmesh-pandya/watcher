@@ -1,0 +1,28 @@
+{
+  "name": "@watcher/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@watcher/shared": "*",
+    "bullmq": "^5.12.0",
+    "dotenv": "^16.4.5",
+    "ioredis": "^5.4.1",
+    "mongoose": "^8.6.0",
+    "pino": "^9.3.2",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.15",
+    "pino-pretty": "^11.2.2",
+    "tsx": "^4.16.5",
+    "typescript": "^5.5.4"
+  }
+}

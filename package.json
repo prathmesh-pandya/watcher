@@ -1,0 +1,27 @@
+{
+  "name": "repo-watcher",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Watches external frontend/backend repos and generates feature docs + QA test cases from pushed diffs.",
+  "engines": {
+    "node": ">=18.17"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @watcher/shared && npm run build -w @watcher/server && npm run build -w @watcher/worker && npm run build -w @watcher/web",
+    "dev": "concurrently -n shared,server,worker,web -c gray,cyan,magenta,green \"npm run dev -w @watcher/shared\" \"npm run dev -w @watcher/server\" \"npm run dev -w @watcher/worker\" \"npm run dev -w @watcher/web\"",
+    "dev:server": "npm run dev -w @watcher/server",
+    "dev:worker": "npm run dev -w @watcher/worker",
+    "dev:web": "npm run dev -w @watcher/web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "clean": "rm -rf node_modules packages/*/node_modules apps/*/node_modules packages/*/dist apps/*/dist",
+    "postinstall": "npm run build -w @watcher/shared"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "typescript": "^5.5.4"
+  }
+}
