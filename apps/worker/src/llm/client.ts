@@ -1,30 +1,11 @@
 /*
- * ===========================================================================
- * STUB -- NOT IMPLEMENTED IN THIS PASS
- * ===========================================================================
- *
- * Both functions below are deliberate placeholders. They return well-formed
- * data of the right shape so the end-to-end skeleton (webhook -> queue ->
- * worker -> Mongo -> React) runs and you can watch real data flow, but no
- * Claude API call is made and no prompt engineering has been done yet.
- *
- * To implement:
- *   1. npm i @anthropic-ai/sdk -w @watcher/worker
- *   2. const anthropic = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY })
- *   3. Replace each body with a messages.create() call against env.ANTHROPIC_MODEL.
- *
- * Contracts the real implementation must keep:
- *   - updateFeatureDoc MUST send `input.currentContent` in the prompt together
- *     with the diff, and ask for a revision of it. Never regenerate from the
- *     diff alone (requirement #4) -- doing so loses every feature that wasn't
- *     touched by this particular push.
- *   - generateTestCases should ask for structured JSON (a tool call or a
- *     JSON-only response) matching GeneratedTestCase[], and validate it with
- *     zod before it reaches Mongo.
- *   - Both should log token usage and outcome via the caller's logger.
- * ===========================================================================
+ * Pass 1 (updateFeatureDoc) calls MiniMax-M3 for real, through MiniMax's
+ * OpenAI-compatible /v1/chat/completions endpoint -- hence the `openai`
+ * package pointed at a different baseURL rather than any custom HTTP or auth.
+ * Pass 2 (generateTestCases) is still a stub -- see the banner above it.
  */
 
+import OpenAI from 'openai';
 import { env } from '../env.js';
 import { logger } from '../logger.js';
 import type {
@@ -34,45 +15,189 @@ import type {
   TestCaseGenerationResult,
 } from './types.js';
 
-const STUB_MODEL = 'stub:not-implemented';
+/** Placeholder shipped in .env.example; a real key never looks like this. */
+const PLACEHOLDER_API_KEY = 'replace-me-with-your-minimax-key';
 
-/** PASS 1 -- STUB. Incrementally revise the feature documentation. */
+/**
+ * Generous enough for a full feature doc returned verbatim. A truncated
+ * document would silently corrupt the stored doc, so finish_reason is checked
+ * below rather than trusted.
+ */
+const MAX_TOKENS = 16_000;
+
+const FEATURE_DOC_SYSTEM_PROMPT = `You are maintaining internal technical documentation for a software
+repository. You will be given a git diff and the current version of the
+feature documentation for this repository (or told that no documentation
+exists yet). Your job is to produce the complete, updated documentation
+as it should read after this diff is applied.
+
+Rules:
+- The audience is technical (engineers, QA), not end users. Describe
+  what the code does and how, not marketing language.
+- Only document things you can actually infer from the diff you're
+  given. Do not invent features, edge cases, or behavior the diff
+  doesn't show evidence of.
+- If existing documentation describes something the diff doesn't
+  touch, keep it as-is unless the diff clearly makes it inaccurate
+  (e.g. removes the feature).
+- If the diff only contains non-functional changes (formatting,
+  comments, refactors with no behavior change, dependency bumps),
+  return the existing documentation completely unchanged.
+- If no existing documentation is provided, write a complete first
+  version based only on what this diff shows — don't claim broader
+  functionality you haven't seen.
+- Output ONLY the documentation content in markdown. No preamble, no
+  explanation of what changed, no meta-commentary about the diff
+  itself — the output IS the document, not a description of an edit.`;
+
+let cachedClient: OpenAI | null = null;
+
+/**
+ * Fails loudly on a missing or placeholder key rather than firing a request
+ * that is guaranteed to 401.
+ */
+function getClient(): OpenAI {
+  const apiKey = env.MINIMAX_API_KEY;
+
+  if (!apiKey || apiKey === PLACEHOLDER_API_KEY) {
+    throw new Error(
+      `MINIMAX_API_KEY is ${apiKey ? 'still the placeholder value' : 'not set'}. ` +
+        'Set a real key in the root .env before the worker can generate feature docs.',
+    );
+  }
+
+  cachedClient ??= new OpenAI({ apiKey, baseURL: env.MINIMAX_BASE_URL });
+  return cachedClient;
+}
+
+/**
+ * `thinking` is a MiniMax extension to the OpenAI chat-completions body, so it
+ * isn't in the SDK's types. Declaring it here keeps the call type-checked
+ * instead of reaching for `any`; the SDK forwards unknown fields as-is.
+ */
+type MiniMaxChatParams = OpenAI.Chat.ChatCompletionCreateParamsNonStreaming & {
+  thinking?: { type: 'disabled' | 'adaptive' };
+};
+
+/**
+ * Defensive only. Thinking is disabled on the request, so this should never
+ * fire; it exists so a provider-side default change degrades into a slightly
+ * odd document rather than reasoning text stored as documentation.
+ */
+function stripThinkBlock(text: string): string {
+  if (!text.includes('<think>')) return text;
+  const closing = text.lastIndexOf('</think>');
+  return closing === -1 ? text : text.slice(closing + '</think>'.length);
+}
+
+/** The diff arrives already capped at MAX_DIFF_CHARS upstream; not re-truncated here. */
+function buildUserMessage(input: FeatureDocUpdateInput): string {
+  const existingDocs = input.currentContent.trim()
+    ? input.currentContent
+    : 'No existing documentation — this is the first revision.';
+
+  return [
+    `Repository: ${input.repoFullName}`,
+    `Branch: ${input.branch}`,
+    `Commit: ${input.diff.headSha}`,
+    '',
+    '## Current feature documentation',
+    '',
+    existingDocs,
+    '',
+    '## Git diff for this push',
+    '',
+    input.diff.diff,
+  ].join('\n');
+}
+
+/**
+ * PASS 1 -- incrementally revise the feature documentation.
+ *
+ * Sends the current stored document alongside the diff so the model revises it
+ * rather than regenerating from the diff alone. API errors are deliberately not
+ * caught: BullMQ's retry/backoff on the job is the retry mechanism.
+ */
 export async function updateFeatureDoc(input: FeatureDocUpdateInput): Promise<FeatureDocUpdateResult> {
-  logger.warn(
+  const client = getClient();
+  const model = env.MINIMAX_MODEL;
+
+  const params: MiniMaxChatParams = {
+    model,
+    max_tokens: MAX_TOKENS,
+    messages: [
+      { role: 'system', content: FEATURE_DOC_SYSTEM_PROMPT },
+      { role: 'user', content: buildUserMessage(input) },
+    ],
+    // MiniMax-M3 defaults to adaptive thinking and would otherwise fold
+    // reasoning into the reply. We want only the finished document.
+    thinking: { type: 'disabled' },
+  };
+
+  const response = await client.chat.completions.create(params);
+
+  const choice = response.choices[0];
+  if (!choice) {
+    throw new Error(`MiniMax returned no choices for ${input.repoFullName}.`);
+  }
+
+  // Saving a half-written document would corrupt the stored doc, since the
+  // processor overwrites content wholesale. Fail instead.
+  if (choice.finish_reason === 'length') {
+    throw new Error(
+      `Feature doc for ${input.repoFullName} hit the ${MAX_TOKENS}-token output cap and would have ` +
+        'been saved truncated. Raise MAX_TOKENS or shorten the stored document.',
+    );
+  }
+
+  if (choice.finish_reason === 'content_filter') {
+    throw new Error(`MiniMax content filter blocked the feature doc for ${input.repoFullName}.`);
+  }
+
+  const content = stripThinkBlock(choice.message.content ?? '');
+
+  if (!content.trim()) {
+    throw new Error(`MiniMax returned an empty feature doc for ${input.repoFullName}.`);
+  }
+
+  logger.info(
     {
-      stub: 'updateFeatureDoc',
       repo: input.repoFullName,
-      model: env.ANTHROPIC_MODEL,
-      currentDocChars: input.currentContent.length,
-      diffChars: input.diff.diff.length,
-      changedFiles: input.diff.files.length,
+      model,
+      finishReason: choice.finish_reason,
+      inputTokens: response.usage?.prompt_tokens,
+      outputTokens: response.usage?.completion_tokens,
+      docChars: content.length,
     },
-    'LLM STUB: no Claude call made -- appending a placeholder revision',
+    'feature doc generated',
   );
 
-  const fileList = input.diff.files
-    .slice(0, 25)
-    .map((f) => `- \`${f.filename}\` (${f.status}, +${f.additions}/-${f.deletions})`)
-    .join('\n');
-
-  const header = input.currentContent.trim()
-    ? input.currentContent.trimEnd()
-    : `# ${input.repoFullName} — Feature Documentation\n\n` +
-      `_Watching branch \`${input.branch}\` (${input.repoType}). This document is maintained ` +
-      `incrementally: each push revises it rather than rewriting it._`;
-
-  const placeholder =
-    `\n\n---\n\n## Pending: ${input.diff.headSha.slice(0, 7)}\n\n` +
-    `> **LLM stub.** No documentation was generated for this commit — ` +
-    `\`updateFeatureDoc()\` in \`apps/worker/src/llm/client.ts\` is still a stub.\n\n` +
-    `Changed files:\n\n${fileList || '- (none reported)'}\n`;
-
   return {
-    content: header + placeholder,
-    summary: `Stub revision for ${input.diff.headSha.slice(0, 7)} (${input.diff.files.length} files changed).`,
-    model: STUB_MODEL,
+    // Returned exactly as received -- no trimming, wrapping or reformatting.
+    content,
+    // The model is instructed to emit only the document, so the history note is
+    // composed here from the diff metadata rather than asked for separately.
+    summary: `Revised for ${input.diff.headSha.slice(0, 7)} (${input.diff.files.length} file${
+      input.diff.files.length === 1 ? '' : 's'
+    } changed).`,
+    model,
   };
 }
+
+/*
+ * ===========================================================================
+ * STUB -- NOT IMPLEMENTED IN THIS PASS
+ * ===========================================================================
+ *
+ * generateTestCases is still a deliberate placeholder. It returns well-formed
+ * data of the right shape so the pipeline runs end to end, but makes no Claude
+ * call and no prompt engineering has been done for it yet.
+ *
+ * To implement: mirror updateFeatureDoc above, but ask for structured JSON
+ * matching GeneratedTestCase[] (a tool call is the reliable way) and validate
+ * it with zod before it reaches Mongo.
+ * ===========================================================================
+ */
 
 /** PASS 2 -- STUB. Produce the QA test cases for this change. */
 export async function generateTestCases(input: TestCaseGenerationInput): Promise<TestCaseGenerationResult> {
@@ -88,7 +213,7 @@ export async function generateTestCases(input: TestCaseGenerationInput): Promise
   );
 
   return {
-    model: STUB_MODEL,
+    model: 'stub:not-implemented',
     testCases: [
       {
         title: `[stub] Smoke-test ${input.repoFullName} at ${input.commitSha.slice(0, 7)}`,
