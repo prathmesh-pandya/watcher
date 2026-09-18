@@ -154,7 +154,7 @@ repos share one secret.
 **4. Add the webhook on GitHub.** Repo → Settings → Webhooks → Add webhook:
 
 - **Payload URL**: `https://<your-ngrok-subdomain>.ngrok-free.app/webhooks/github`
-- **Content type**: `application/json` ← required; the signature won't match otherwise
+- **Content type**: either works — `application/json` or GitHub's default `application/x-www-form-urlencoded`
 - **Secret**: the same secret
 - **Events**: *Just the push event*
 
@@ -174,7 +174,7 @@ The endpoint answers in a few milliseconds and always tells you what it decided:
 | `200 {"deduped":false}`                 | Accepted and queued                                   |
 | `200 {"deduped":true}`                  | Already seen this commit; ignored                     |
 | `202 {"ignored":"branch_not_watched"}`  | Push was to some other branch                         |
-| `401 {"error":"invalid_signature"}`     | Secret mismatch, or content type isn't `application/json` |
+| `401 {"error":"invalid_signature"}`     | The secret in GitHub doesn't match the one this app has   |
 | `404 {"error":"repo_not_configured"}`   | No RepoConfig for that repo — add it on Settings      |
 
 ### Testing without ngrok
@@ -297,7 +297,7 @@ The processor, models, retries and idempotency don't need to change.
 
 | Symptom                                 | Cause                                                                 |
 | --------------------------------------- | --------------------------------------------------------------------- |
-| `invalid_signature` on every delivery    | Webhook content type isn't `application/json`, or the secrets differ   |
+| `invalid_signature` on every delivery    | The GitHub webhook secret differs from `GITHUB_WEBHOOK_SECRET` (or the per-repo secret set on Settings, which wins when present) |
 | Boot fails naming a variable             | Missing from `.env` — by design, there are no fallbacks                |
 | Webhook 200s but nothing appears         | The worker isn't running, or `REDIS_URL` differs between the two       |
 | `GitHub 404` in the worker logs          | `GITHUB_TOKEN` can't see that repo (private repos need `repo` scope)   |

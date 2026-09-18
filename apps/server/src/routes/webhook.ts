@@ -5,6 +5,7 @@ import { env } from '../env.js';
 import { logger } from '../logger.js';
 import { pushQueue } from '../lib/queue.js';
 import { verifyGithubSignature } from '../lib/signature.js';
+import { readWebhookBody } from '../lib/webhookBody.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 
 export const webhookRouter: Router = Router();
@@ -32,20 +33,28 @@ interface PushPayload {
  */
 webhookRouter.post(
   '/github',
-  raw({ type: 'application/json', limit: '10mb' }),
+  // Capture the raw bytes whatever the content type. GitHub defaults its
+  // webhooks to application/x-www-form-urlencoded, and matching only
+  // application/json here left req.body unparsed -- which surfaced as a bogus
+  // 'invalid_json'. The signature must be checked against these exact bytes,
+  // so this stays express.raw() rather than express.json().
+  raw({ type: () => true, limit: '10mb' }),
   asyncHandler(async (req, res) => {
     const deliveryId = req.get('x-github-delivery') ?? 'unknown';
     const event = req.get('x-github-event') ?? 'unknown';
     const signature = req.get('x-hub-signature-256') ?? undefined;
     const log = logger.child({ deliveryId, event, route: 'webhook' });
 
+    const contentType = req.get('content-type');
     const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
-    log.info({ bytes: rawBody.length }, 'webhook received');
+    log.info({ bytes: rawBody.length, contentType }, 'webhook received');
 
-    // GitHub pings the endpoint once when the hook is created.
+    // GitHub pings the endpoint once when the hook is saved, and again on any
+    // manual redelivery. Acknowledge it unconditionally -- no body parsing, no
+    // repo lookup, no signature check -- so a ping can never fail on payload
+    // shape or content type. Nothing is trusted or persisted from it.
     if (event === 'ping') {
-      // We still verify below for a push; for ping we can't know the repo
-      // secret cheaply enough to be worth it, so just acknowledge.
+      log.info('ping acknowledged');
       res.status(200).json({ ok: true, pong: true });
       return;
     }
@@ -56,17 +65,17 @@ webhookRouter.post(
       return;
     }
 
-    // Parse before verifying ONLY to learn which repo this is, so we can look
-    // up that repo's secret. Nothing from this parse is trusted or persisted
-    // until the signature check below passes.
-    let payload: PushPayload;
-    try {
-      payload = JSON.parse(rawBody.toString('utf8')) as PushPayload;
-    } catch {
-      log.warn('rejected: body is not valid JSON');
-      res.status(400).json({ error: 'invalid_json' });
+    // Read before verifying ONLY to learn which repo this is, so we can look up
+    // that repo's secret. Nothing read here is trusted or persisted until the
+    // signature check below passes -- and that check runs against rawBody, the
+    // untouched bytes, not this decoded object.
+    const body = readWebhookBody(rawBody, contentType);
+    if (!body.ok) {
+      log.warn({ contentType, reason: body.reason }, 'rejected: could not read payload');
+      res.status(400).json({ error: 'invalid_json', detail: body.reason });
       return;
     }
+    const payload = body.payload as PushPayload;
 
     const fullName = payload.repository?.full_name?.toLowerCase();
     if (!fullName) {
