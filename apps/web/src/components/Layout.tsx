@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from 'react-router-dom';
 import { getToken } from '../lib/api.js';
+import { EyeGlyph } from './EyeGlyph.js';
 
 const NAV = [
   { to: '/features', label: 'Features' },
@@ -11,16 +12,17 @@ export function Layout() {
   const hasToken = Boolean(getToken());
 
   return (
-    <div className="app">
-      <header className="nav">
-        <span className="nav__brand">Repo Watcher</span>
-        <nav className="nav__links">
+    <div className="shell">
+      <header className="topbar">
+        {/* The mark is the eye itself — no separate logo lockup. */}
+        <NavLink to="/features" className="mark">
+          <EyeGlyph state="idle" size={22} />
+          <span className="mark__word">Watcher</span>
+        </NavLink>
+
+        <nav className="topbar__nav">
           {NAV.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              className={({ isActive }) => `nav__link${isActive ? ' nav__link--active' : ''}`}
-            >
+            <NavLink key={item.to} to={item.to} className="navlink">
               {item.label}
             </NavLink>
           ))}
@@ -28,12 +30,13 @@ export function Layout() {
       </header>
 
       {!hasToken && (
-        <div className="banner banner--warn">
-          No API token set — the pages below will fail to load. Add it on <NavLink to="/settings">Settings</NavLink>.
+        <div className="notice-strip">
+          Add your access token on <NavLink to="/settings">Settings</NavLink> to start reading what the Watcher has
+          recorded.
         </div>
       )}
 
-      <main className="main">
+      <main className="canvas">
         <Outlet />
       </main>
     </div>

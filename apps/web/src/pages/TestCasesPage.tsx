@@ -8,6 +8,14 @@ import {
 import { api } from '../lib/api.js';
 import { useApi } from '../lib/useApi.js';
 import { EmptyState, ErrorState, Loading } from '../components/States.js';
+import { RichText } from '../components/RichText.js';
+
+/** The verb the person performs, not the state the system stores. */
+const ACTION_LABELS: Record<TestCaseStatus, string> = {
+  new: 'Not started',
+  in_progress: 'Working on it',
+  done: 'Mark done',
+};
 
 export function TestCasesPage() {
   const [repo, setRepo] = useState('');
@@ -19,38 +27,44 @@ export function TestCasesPage() {
     [repo, status],
   );
 
-  // Optimistic status toggles, keyed by id, so the checklist feels instant.
   const [overrides, setOverrides] = useState<Record<string, TestCaseStatus>>({});
   const [saving, setSaving] = useState<string | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
 
   async function changeStatus(tc: TestCase, next: TestCaseStatus) {
     const previous = overrides[tc.id] ?? tc.status;
+    if (previous === next) return;
+
     setOverrides((o) => ({ ...o, [tc.id]: next }));
     setSaving(tc.id);
+    setFailed(null);
     try {
       await api.setTestCaseStatus(tc.id, next);
-    } catch {
+    } catch (err) {
       setOverrides((o) => ({ ...o, [tc.id]: previous }));
+      setFailed((err as Error).message);
     } finally {
       setSaving(null);
     }
   }
 
+  const items = testCases.data?.items ?? [];
+
   return (
-    <div className="page">
-      <div className="page__header">
+    <div>
+      <div className="head">
         <h1>Test Cases</h1>
-        <p className="page__subtitle">QA checklist generated from each push. Toggle status as you work through it.</p>
+        <p>What to check by hand for each change the Watcher has seen. Move each one along as you work through it.</p>
       </div>
 
-      <div className="filters">
+      <div className="controls">
         <label>
-          Repo
+          Repository
           <select value={repo} onChange={(e) => setRepo(e.target.value)}>
-            <option value="">All repos</option>
+            <option value="">Every repository</option>
             {(repos.data?.items ?? []).map((r) => (
               <option key={r.id} value={r.fullName}>
-                {r.fullName} ({r.type})
+                {r.fullName}
               </option>
             ))}
           </select>
@@ -59,7 +73,7 @@ export function TestCasesPage() {
         <label>
           Status
           <select value={status} onChange={(e) => setStatus(e.target.value as TestCaseStatus | '')}>
-            <option value="">All statuses</option>
+            <option value="">Any status</option>
             {TEST_CASE_STATUSES.map((s) => (
               <option key={s} value={s}>
                 {TEST_CASE_STATUS_LABELS[s]}
@@ -73,58 +87,66 @@ export function TestCasesPage() {
         </button>
       </div>
 
-      {testCases.loading && <Loading what="test cases" />}
+      {failed && <p className="feedback feedback--bad">Could not save that change. {failed}</p>}
+
+      {testCases.loading && <Loading what="the checklist" />}
       {testCases.error && <ErrorState message={testCases.error} onRetry={testCases.reload} />}
 
-      {!testCases.loading && !testCases.error && (testCases.data?.items.length ?? 0) === 0 && (
-        <EmptyState title="No test cases match">
-          <p>Test cases are created by the worker after a push to a watched branch.</p>
+      {!testCases.loading && !testCases.error && items.length === 0 && (
+        <EmptyState title={repo || status ? 'Nothing matches those filters' : 'No test cases yet'}>
+          <p>
+            {repo || status
+              ? 'Widen the filters above, or wait for the next push to a watched branch.'
+              : 'The Watcher writes these after a push to a branch it follows. Add a repo to start watching.'}
+          </p>
         </EmptyState>
       )}
 
-      <ul className="cases">
-        {(testCases.data?.items ?? []).map((tc) => {
+      <ul className="observations">
+        {items.map((tc) => {
           const current = overrides[tc.id] ?? tc.status;
           return (
-            <li key={tc.id} className={`case case--${current}`}>
-              <div className="case__head">
-                <h3>{tc.title}</h3>
-                <div className="case__status">
+            <li key={tc.id} className={`panel observation${current === 'done' ? ' observation--done' : ''}`}>
+              <div className="panel__head">
+                <h3 className="observation__title">{tc.title}</h3>
+
+                {/* One clearly filled control; the rest recede. */}
+                <div className="statuses" role="group" aria-label="Status">
                   {TEST_CASE_STATUSES.map((s) => (
                     <button
                       key={s}
                       type="button"
+                      data-status={s}
+                      aria-pressed={current === s}
                       disabled={saving === tc.id}
-                      className={`pill${current === s ? ' pill--active' : ''}`}
                       onClick={() => changeStatus(tc, s)}
                     >
-                      {TEST_CASE_STATUS_LABELS[s]}
+                      {ACTION_LABELS[s]}
                     </button>
                   ))}
                 </div>
               </div>
 
-              <div className="case__tags">
-                <span className="tag">{tc.repoFullName}</span>
-                <span className="tag">
-                  <code>{tc.commitSha.slice(0, 7)}</code>
-                </span>
-                <span className="tag">{tc.priority} priority</span>
-                <span className="tag">{tc.kind}</span>
-                {tc.area && <span className="tag">{tc.area}</span>}
-                <span className="tag tag--muted">{new Date(tc.createdAt).toLocaleString()}</span>
+              <div className="observation__meta">
+                <span>{tc.repoFullName}</span>
+                <span className="data">{tc.commitSha.slice(0, 7)}</span>
+                <span>{tc.priority} priority</span>
+                {tc.area && <span>{tc.area}</span>}
+                <span>{new Date(tc.createdAt).toLocaleDateString()}</span>
               </div>
 
               {tc.steps.length > 0 && (
-                <ol className="case__steps">
+                <ol className="observation__steps">
                   {tc.steps.map((step, i) => (
-                    <li key={i}>{step}</li>
+                    <li key={i}>
+                      <RichText>{step}</RichText>
+                    </li>
                   ))}
                 </ol>
               )}
 
-              <p className="case__expected">
-                <strong>Expected:</strong> {tc.expectedResult}
+              <p className="observation__expected">
+                <b>What should happen:</b> <RichText>{tc.expectedResult}</RichText>
               </p>
             </li>
           );
