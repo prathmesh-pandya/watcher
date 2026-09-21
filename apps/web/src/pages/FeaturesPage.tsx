@@ -1,23 +1,13 @@
 import { useMemo, useState } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { FeatureDoc, TestCase } from '@watcher/shared';
+import type { FeatureDoc } from '@watcher/shared';
 import { api } from '../lib/api.js';
 import { useApi } from '../lib/useApi.js';
 import { EmptyState, ErrorState, Loading } from '../components/States.js';
-import { EyeGlyph, type EyeState } from '../components/EyeGlyph.js';
-
-/** Derived from real rows: untriaged cases need a person, in-progress ones have one. */
-function eyeStateFor(repoFullName: string, cases: TestCase[]): EyeState {
-  const mine = cases.filter((c) => c.repoFullName === repoFullName);
-  if (mine.some((c) => c.status === 'new')) return 'attention';
-  if (mine.some((c) => c.status === 'in_progress')) return 'working';
-  return 'idle';
-}
 
 export function FeaturesPage() {
   const { data, loading, error, reload } = useApi(() => api.listFeatureDocs(), []);
-  const cases = useApi(() => api.listTestCases(), []);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const docs = useMemo(() => data?.items ?? [], [data]);
@@ -38,7 +28,7 @@ export function FeaturesPage() {
   }
 
   return (
-    <div>
+    <div className="reading">
       <div className="head">
         <h1>Features</h1>
         <p>What the Watcher understands about the code it follows, revised with every push — never rewritten.</p>
@@ -63,7 +53,6 @@ export function FeaturesPage() {
         <>
           <section className="panel">
             <div className="panel__head">
-              <EyeGlyph state={eyeStateFor(selected.repoFullName, cases.data?.items ?? [])} />
               <h2>{selected.repoFullName}</h2>
             </div>
 

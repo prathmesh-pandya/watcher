@@ -3,7 +3,6 @@ import { REPO_TYPES, type RepoType } from '@watcher/shared';
 import { api, getToken, setToken } from '../lib/api.js';
 import { useApi } from '../lib/useApi.js';
 import { EmptyState, ErrorState, Loading } from '../components/States.js';
-import { EyeGlyph, type EyeState } from '../components/EyeGlyph.js';
 
 type Feedback = { kind: 'ok' | 'bad'; message: string } | null;
 
@@ -12,7 +11,6 @@ export function SettingsPage() {
   const [tokenFeedback, setTokenFeedback] = useState<Feedback>(null);
 
   const repos = useApi(() => api.listRepos(), []);
-  const cases = useApi(() => api.listTestCases(), []);
 
   const [form, setForm] = useState({
     repoUrl: '',
@@ -22,13 +20,6 @@ export function SettingsPage() {
   });
   const [submitting, setSubmitting] = useState(false);
   const [repoFeedback, setRepoFeedback] = useState<Feedback>(null);
-
-  function eyeStateFor(fullName: string): EyeState {
-    const mine = (cases.data?.items ?? []).filter((c) => c.repoFullName === fullName);
-    if (mine.some((c) => c.status === 'new')) return 'attention';
-    if (mine.some((c) => c.status === 'in_progress')) return 'working';
-    return 'idle';
-  }
 
   async function saveToken(e: FormEvent) {
     e.preventDefault();
@@ -47,7 +38,6 @@ export function SettingsPage() {
       await api.listRepos();
       setTokenFeedback({ kind: 'ok', message: 'Token saved and accepted.' });
       repos.reload();
-      cases.reload();
     } catch (err) {
       setTokenFeedback({ kind: 'bad', message: `Saved, but the server rejected it. ${(err as Error).message}` });
     }
@@ -92,7 +82,7 @@ export function SettingsPage() {
   const items = repos.data?.items ?? [];
 
   return (
-    <div>
+    <div className="reading">
       <div className="head">
         <h1>Settings</h1>
         <p>Your access token, and the repositories the Watcher follows.</p>
@@ -144,7 +134,6 @@ export function SettingsPage() {
           <ul className="roster">
             {items.map((r) => (
               <li key={r.id}>
-                <EyeGlyph state={eyeStateFor(r.fullName)} size={18} />
                 <div className="roster__name">
                   <a href={r.repoUrl} target="_blank" rel="noreferrer">
                     {r.fullName}

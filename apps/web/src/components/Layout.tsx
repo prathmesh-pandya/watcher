@@ -16,7 +16,7 @@ export function Layout() {
       <header className="topbar">
         {/* The mark is the eye itself — no separate logo lockup. */}
         <NavLink to="/features" className="mark">
-          <EyeGlyph state="idle" size={22} />
+          <EyeGlyph size={20} />
           <span className="mark__word">Watcher</span>
         </NavLink>
 
