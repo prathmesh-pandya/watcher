@@ -38,10 +38,16 @@ export function createApp(): Express {
   app.use('/health', healthRouter);
   app.use('/webhooks', webhookRouter);
 
+  // Everything under /api sits behind the shared token. Checked before the body
+  // parsers so an unauthenticated caller can't make us read a large body.
+  app.use('/api', requireApiToken);
+
+  // Baseline documentation is a whole-codebase analysis and outgrows the
+  // general limit. Parsing it here first means the stricter parser below sees a
+  // body that's already been read and leaves it alone.
+  app.use('/api/features/onboarding', express.json({ limit: '8mb' }));
   app.use(express.json({ limit: '1mb' }));
 
-  // Everything under /api sits behind the shared token.
-  app.use('/api', requireApiToken);
   app.use('/api/repos', reposRouter);
   app.use('/api/features', featuresRouter);
   app.use('/api/test-cases', testCasesRouter);
@@ -54,6 +60,12 @@ export function createApp(): Express {
     const requestId = res.getHeader('x-request-id');
     logger.error({ err, requestId, path: req.path }, 'unhandled error');
     if (res.headersSent) return;
+
+    // body-parser's own error, worth naming: a 500 here reads as our fault.
+    if ((err as { type?: string }).type === 'entity.too.large') {
+      res.status(413).json({ error: 'payload_too_large', detail: 'That body is larger than this route accepts.' });
+      return;
+    }
     res.status(500).json({
       error: 'internal_error',
       ...(env.isProduction ? {} : { detail: (err as Error).message }),

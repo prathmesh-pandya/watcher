@@ -34,6 +34,8 @@ export function serializeFeatureDoc(doc: HydratedDocument<FeatureDocDoc>): Featu
     revisionCount: doc.revisionCount,
     history: doc.history.map((rev) => ({
       commitSha: rev.commitSha,
+      // Revisions written before the field existed are push-driven by definition.
+      source: rev.source ?? 'push',
       summary: rev.summary,
       previousContent: rev.previousContent,
       model: rev.model,

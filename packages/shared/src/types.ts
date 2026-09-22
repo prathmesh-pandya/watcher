@@ -29,6 +29,16 @@ export type TestCaseKind = (typeof TEST_CASE_KINDS)[number];
 export const TEST_CASE_PRIORITIES = ['low', 'medium', 'high'] as const;
 export type TestCasePriority = (typeof TEST_CASE_PRIORITIES)[number];
 
+/**
+ * What produced a feature-doc revision.
+ *  - `push`: the normal path -- the worker folded a pushed diff into the doc.
+ *  - `onboarding`: a one-off baseline written in whole from an external
+ *    analysis of the existing codebase, seeding the doc before (or resyncing
+ *    it alongside) incremental tracking.
+ */
+export const FEATURE_DOC_SOURCES = ['push', 'onboarding'] as const;
+export type FeatureDocSource = (typeof FEATURE_DOC_SOURCES)[number];
+
 // ---------------------------------------------------------------------------
 // RepoConfig
 // ---------------------------------------------------------------------------
@@ -73,10 +83,12 @@ export interface RepoConfigInput {
 // FeatureDoc
 // ---------------------------------------------------------------------------
 
-/** One revision of a feature doc, appended every time the LLM updates it. */
+/** One revision of a feature doc, appended every time the content changes. */
 export interface FeatureDocRevision {
   /** Commit SHA whose diff triggered this revision. */
   commitSha: string;
+  /** Which ingestion path wrote it. Older revisions read back as `push`. */
+  source: FeatureDocSource;
   /** Short human-readable note from the model about what it changed. */
   summary: string;
   /** Full content *before* this revision was applied, for diffing/rollback. */
@@ -103,6 +115,14 @@ export interface FeatureDoc {
   history: FeatureDocRevision[];
   createdAt: string;
   updatedAt: string;
+}
+
+/** Body accepted by POST /api/features/onboarding. */
+export interface FeatureDocOnboardingInput {
+  /** RepoConfig id, or the repo's `owner/name`. */
+  repo: string;
+  /** The complete baseline documentation, replacing whatever is there. */
+  content: string;
 }
 
 // ---------------------------------------------------------------------------

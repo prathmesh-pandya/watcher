@@ -1,5 +1,6 @@
 import type {
   FeatureDoc,
+  FeatureDocOnboardingInput,
   Paginated,
   RepoConfig,
   RepoConfigInput,
@@ -79,6 +80,9 @@ export const api = {
 
   listFeatureDocs: (repo?: string) =>
     request<Paginated<FeatureDoc>>(`/api/features${repo ? `?repo=${encodeURIComponent(repo)}` : ''}`),
+  /** One-off: replaces a repo's documentation with an externally written baseline. */
+  ingestBaseline: (input: FeatureDocOnboardingInput) =>
+    request<FeatureDoc>('/api/features/onboarding', { method: 'POST', body: JSON.stringify(input) }),
 
   listTestCases: (params: { repo?: string; status?: TestCaseStatus } = {}) => {
     const query = new URLSearchParams();

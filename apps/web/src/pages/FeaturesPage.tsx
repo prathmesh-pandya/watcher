@@ -97,9 +97,11 @@ export function FeaturesPage() {
               {/* Genuinely sequential data, so dated markers are earned here. */}
               <ol className="timeline">
                 {[...selected.history].reverse().map((rev, i) => (
-                  <li key={`${rev.commitSha}-${i}`}>
+                  <li key={`${rev.commitSha}-${i}`} data-source={rev.source}>
                     <div className="timeline__when">
                       <span className="data">{rev.commitSha.slice(0, 7)}</span>
+                      {/* A baseline is a whole rewrite, not a revision on top of one -- say so. */}
+                      {rev.source === 'onboarding' && <span className="chip chip--baseline">baseline</span>}
                       <span className="timeline__date">{new Date(rev.createdAt).toLocaleString()}</span>
                     </div>
                     <p className="timeline__what">{rev.summary}</p>

@@ -18,6 +18,14 @@ const schema = z.object({
 
   /** Fallback secret for repos whose RepoConfig has none of its own. */
   GITHUB_WEBHOOK_SECRET: z.string().min(1).optional(),
+
+  /**
+   * Only the baseline-ingestion route calls GitHub from the server (to read a
+   * branch's HEAD), so this stays optional: a deployment that never onboards a
+   * repo shouldn't fail to boot. The route reports the miss explicitly.
+   */
+  GITHUB_TOKEN: z.string().min(1).optional(),
+  GITHUB_API_BASE: z.string().default('https://api.github.com'),
 });
 
 const parsed = schema.safeParse(process.env);

@@ -1,4 +1,5 @@
 import { isNullSha } from '@watcher/shared';
+import { githubFetch, type GitHubAuth } from '@watcher/shared/github';
 import { env } from '../env.js';
 import { logger } from '../logger.js';
 
@@ -22,23 +23,8 @@ export interface RepoDiff {
   compareUrl: string | null;
 }
 
-function ghHeaders(accept: string): Record<string, string> {
-  return {
-    accept,
-    authorization: `Bearer ${env.GITHUB_TOKEN}`,
-    'x-github-api-version': '2022-11-28',
-    'user-agent': 'repo-watcher',
-  };
-}
-
-async function ghFetch(url: string, accept: string): Promise<Response> {
-  const res = await fetch(url, { headers: ghHeaders(accept) });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`GitHub ${res.status} ${res.statusText} for ${url}: ${body.slice(0, 400)}`);
-  }
-  return res;
-}
+/** The worker's credentials; the request plumbing itself lives in shared. */
+const auth: GitHubAuth = { token: env.GITHUB_TOKEN, apiBase: env.GITHUB_API_BASE };
 
 /**
  * Fetches the diff for a push using GitHub's compare API.
@@ -68,8 +54,8 @@ export async function fetchPushDiff(params: {
   logger.debug({ repoFullName, url, isInitialPush }, 'fetching diff from GitHub');
 
   const [diffRes, jsonRes] = await Promise.all([
-    ghFetch(url, 'application/vnd.github.v3.diff'),
-    ghFetch(url, 'application/vnd.github+json'),
+    githubFetch(auth, url, 'application/vnd.github.v3.diff'),
+    githubFetch(auth, url, 'application/vnd.github+json'),
   ]);
 
   const rawDiff = await diffRes.text();

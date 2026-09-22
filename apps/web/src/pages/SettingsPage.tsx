@@ -1,5 +1,5 @@
-import { useState, type FormEvent } from 'react';
-import { REPO_TYPES, type RepoType } from '@watcher/shared';
+import { useMemo, useState, type FormEvent } from 'react';
+import { REPO_TYPES, type RepoConfig, type RepoType } from '@watcher/shared';
 import { api, getToken, setToken } from '../lib/api.js';
 import { useApi } from '../lib/useApi.js';
 import { EmptyState, ErrorState, Loading } from '../components/States.js';
@@ -20,6 +20,20 @@ export function SettingsPage() {
   });
   const [submitting, setSubmitting] = useState(false);
   const [repoFeedback, setRepoFeedback] = useState<Feedback>(null);
+
+  // Baseline ingestion. One repo's form is open at a time, which keeps a wall
+  // of textareas off the page and makes the open one obviously the target.
+  const featureDocs = useApi(() => api.listFeatureDocs(), []);
+  const [baselineFor, setBaselineFor] = useState<string | null>(null);
+  const [baselineText, setBaselineText] = useState('');
+  const [baselineBusy, setBaselineBusy] = useState(false);
+  const [baselineFeedback, setBaselineFeedback] = useState<Feedback>(null);
+
+  /** Repos whose docs already say something -- those are the ones a baseline replaces. */
+  const documented = useMemo(
+    () => new Set((featureDocs.data?.items ?? []).filter((d) => d.content.trim()).map((d) => d.repoFullName)),
+    [featureDocs.data],
+  );
 
   async function saveToken(e: FormEvent) {
     e.preventDefault();
@@ -79,6 +93,47 @@ export function SettingsPage() {
     }
   }
 
+  function toggleBaseline(id: string) {
+    setBaselineFeedback(null);
+    setBaselineText('');
+    setBaselineFor((current) => (current === id ? null : id));
+  }
+
+  async function submitBaseline(e: FormEvent, repo: RepoConfig) {
+    e.preventDefault();
+    const content = baselineText.trim();
+    if (!content) {
+      setBaselineFeedback({ kind: 'bad', message: 'Paste the baseline documentation first.' });
+      return;
+    }
+    // Re-running this on a documented repo is allowed, but only on purpose.
+    if (
+      documented.has(repo.fullName) &&
+      !window.confirm(`${repo.fullName} already has documentation. This replaces the current documentation for this repo.`)
+    ) {
+      return;
+    }
+
+    setBaselineBusy(true);
+    setBaselineFeedback(null);
+    try {
+      const doc = await api.ingestBaseline({ repo: repo.id, content });
+      setBaselineFeedback({
+        kind: 'ok',
+        message: `Documentation for ${repo.fullName} written from the baseline, at commit ${
+          doc.lastCommitSha?.slice(0, 7) ?? 'unknown'
+        }. Later pushes revise it from there.`,
+      });
+      setBaselineText('');
+      setBaselineFor(null);
+      featureDocs.reload();
+    } catch (err) {
+      setBaselineFeedback({ kind: 'bad', message: (err as Error).message });
+    } finally {
+      setBaselineBusy(false);
+    }
+  }
+
   const items = repos.data?.items ?? [];
 
   return (
@@ -134,21 +189,63 @@ export function SettingsPage() {
           <ul className="roster">
             {items.map((r) => (
               <li key={r.id}>
-                <div className="roster__name">
-                  <a href={r.repoUrl} target="_blank" rel="noreferrer">
-                    {r.fullName}
-                  </a>
-                  <span className="roster__sub">
-                    watching <span className="data">{r.targetBranch}</span> — {r.type}
-                    {r.enabled ? '' : ' — paused'}
-                  </span>
+                <div className="roster__row">
+                  <div className="roster__name">
+                    <a href={r.repoUrl} target="_blank" rel="noreferrer">
+                      {r.fullName}
+                    </a>
+                    <span className="roster__sub">
+                      watching <span className="data">{r.targetBranch}</span> — {r.type}
+                      {r.enabled ? '' : ' — paused'}
+                      {documented.has(r.fullName) ? ' — documented' : ''}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn--quiet"
+                    aria-expanded={baselineFor === r.id}
+                    onClick={() => toggleBaseline(r.id)}
+                  >
+                    {baselineFor === r.id ? 'Cancel' : 'Set baseline docs'}
+                  </button>
+                  <button type="button" className="btn btn--quiet" onClick={() => stopWatching(r.id, r.fullName)}>
+                    Stop watching
+                  </button>
                 </div>
-                <button type="button" className="btn btn--quiet" onClick={() => stopWatching(r.id, r.fullName)}>
-                  Stop watching
-                </button>
+
+                {baselineFor === r.id && (
+                  <form className="roster__baseline" onSubmit={(e) => submitBaseline(e, r)}>
+                    <label>
+                      Baseline documentation
+                      <textarea
+                        rows={10}
+                        value={baselineText}
+                        placeholder={`Paste the whole-codebase analysis for ${r.fullName} here.`}
+                        onChange={(e) => {
+                          setBaselineText(e.target.value);
+                          setBaselineFeedback(null);
+                        }}
+                      />
+                      <span className="hint">
+                        Written elsewhere (Claude Code, run against the repo) and pasted in whole. It replaces this
+                        repo&rsquo;s documentation and is stamped with {r.targetBranch}&rsquo;s current commit, so the
+                        next push revises the baseline instead of starting over.
+                      </span>
+                    </label>
+                    <button type="submit" className="btn btn--primary" disabled={baselineBusy} style={{ alignSelf: 'flex-start' }}>
+                      {baselineBusy ? 'Writing…' : documented.has(r.fullName) ? 'Replace documentation' : 'Write documentation'}
+                    </button>
+                  </form>
+                )}
               </li>
             ))}
           </ul>
+        )}
+
+        {baselineFeedback && (
+          <p className={`feedback feedback--${baselineFeedback.kind === 'ok' ? 'ok' : 'bad'}`} style={{ marginTop: 16 }}>
+            {baselineFeedback.message}
+          </p>
         )}
 
         {repoFeedback && (

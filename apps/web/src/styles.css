@@ -224,6 +224,8 @@ a { color: var(--gold); text-underline-offset: 2px; }
 .chip--high { color: #f0938c; background: rgb(224 87 79 / 0.14); border-color: rgb(224 87 79 / 0.3); }
 .chip--medium { color: #e3b467; background: rgb(217 154 43 / 0.13); border-color: rgb(217 154 43 / 0.28); }
 .chip--low { color: #9aa1af; background: rgb(107 114 128 / 0.16); border-color: rgb(107 114 128 / 0.32); }
+/* A revision that was pasted in whole rather than folded in from a diff. */
+.chip--baseline { color: #b6a4ff; background: rgb(123 92 255 / 0.15); border-color: rgb(123 92 255 / 0.34); }
 
 .tcard__area { color: var(--text-muted); background: var(--surface); border: 1px solid var(--border); padding: 1px 7px; border-radius: 3px; }
 .tcard__repo { color: var(--text-faint); }
@@ -257,14 +259,15 @@ a { color: var(--gold); text-underline-offset: 2px; }
 .controls { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; margin-bottom: 20px; }
 label { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--text-muted); }
 
-input, select {
+input, select, textarea {
   font: 400 14px var(--body);
   background: var(--surface); color: var(--text-primary);
   border: 1px solid var(--border); border-radius: 4px;
   padding: 8px 10px; min-width: 200px;
 }
-input::placeholder { color: var(--text-faint); font-family: var(--body); letter-spacing: normal; }
-input:focus-visible, select:focus-visible { outline: 2px solid var(--gold); outline-offset: -1px; }
+input::placeholder, textarea::placeholder { color: var(--text-faint); font-family: var(--body); letter-spacing: normal; }
+input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--gold); outline-offset: -1px; }
+textarea { width: 100%; resize: vertical; line-height: 1.55; font-family: var(--data); font-size: 13px; }
 input[type='password'] { font-family: var(--data); letter-spacing: 0.06em; }
 
 .btn {
@@ -289,13 +292,18 @@ input[type='password'] { font-family: var(--data); letter-spacing: 0.06em; }
 
 /* --- repo roster -------------------------------------------------------- */
 .roster { list-style: none; margin: 0; padding: 0; }
-.roster li { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.roster li { padding: 12px 0; border-bottom: 1px solid var(--border); }
 .roster li:last-child { border-bottom: 0; }
+.roster__row { display: flex; align-items: center; gap: 12px; }
 .roster__name { display: flex; flex-direction: column; gap: 2px; margin-right: auto; min-width: 0; }
 .roster__name a { color: var(--text-primary); text-decoration: none; font-weight: 500; }
 .roster__name a:hover { color: var(--gold); }
 .roster__sub { font-size: 12.5px; color: var(--text-muted); }
 .roster__sub .data { color: var(--text-primary); }
+
+/* Baseline ingestion: open under the repo it belongs to, one at a time. */
+.roster__baseline { display: flex; flex-direction: column; gap: 12px; margin: 14px 0 4px; padding-left: 14px; border-left: 2px solid var(--border-strong); }
+.roster__baseline .hint { max-width: 64ch; }
 
 /* --- states ------------------------------------------------------------- */
 .state { padding: 40px 24px; text-align: center; }

@@ -1,7 +1,9 @@
 import { Schema, model, type HydratedDocument, type Model } from 'mongoose';
+import { FEATURE_DOC_SOURCES, type FeatureDocSource } from '../types.js';
 
 export interface FeatureDocRevisionDoc {
   commitSha: string;
+  source: FeatureDocSource;
   summary: string;
   previousContent: string;
   model: string;
@@ -23,6 +25,9 @@ export interface FeatureDocDoc {
 const revisionSchema = new Schema<FeatureDocRevisionDoc>(
   {
     commitSha: { type: String, required: true },
+    // Defaulted so the worker's existing $push (which doesn't set it) and any
+    // revision already in the database both read back as 'push'.
+    source: { type: String, required: true, enum: FEATURE_DOC_SOURCES, default: 'push' },
     summary: { type: String, required: true, default: '' },
     previousContent: { type: String, required: true, default: '' },
     model: { type: String, required: true, default: 'unknown' },
